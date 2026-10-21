@@ -1,0 +1,17 @@
+name: tdt4501
+channels:
+  - conda-forge
+dependencies:
+  - jupyter=1.1.1
+  - matplotlib=3.11.2
+  - numpy=2.5.4
+  - pandas=3.0.6
+  - pyarrow=25.0.0
+  - python=3.15
+  - scikit-learn=1.9.1
+  - scipy=1.18.1
+  - pip
+  - pip:
+    - -e .
+  - pytest
+  

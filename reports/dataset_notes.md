@@ -1,0 +1,12 @@
+## Running notes about dataset
+- The MEPS model forecasts are for the entire period, regardless of when a particular park comes online. Aggregating zone features before forecasting (without weighting) means the prediction is partly based on wind parks that haven't been built yet. Power curves are non-linear, so I need to be careful in choosing whether/where to aggregate features. Questions for later method/design decisions:
+    1. What targets do I actually have? Look at which files contain power. Can I train a per-park power model directly, or would park-level power have to be a latent quantity, where only the sum is observed?
+    2. Where does the non-linearity sit? Power curves are strongly non-linear. Does averaging wind speeds and then applying a curve give the same result as applying the curve per park and then summing?
+    4. If I have a predictive distribution per park, can I get the zone distribution by combining the marginals? What else do I need to know about the parks?
+- **Dependence within a member (keep).** Each MEPS member is one physically consistent weather scenario across all parks, so the members preserve the spatial dependence between parks. Pushing member k through every park's power curve and summing gives one coherent scenario for zone power, and doing this for all 15 members gives draws from the joint distribution. Combining per-park marginals as if they were independent makes the zone total too narrow, because nearby parks have highly correlated weather. Reading: ensemble copula coupling (Schefzik, Thorarinsdottir & Gneiting, 2013).
+- **Exchangeability across members (check).** The members are not interchangeable: member 00 is the control (unperturbed) run, and the others are perturbed versions with a spread meant to represent forecast uncertainty. Open questions:
+    - Is the control actually more accurate than the other members or the ensemble mean? Exercise 6.4 tests this, and "best estimate" is a claim to check, not assume.
+    - What exactly is perturbed in MEPS: only initial conditions, or also boundary conditions or model physics? Are the members all from the same model run? Check the MET Norway MEPS documentation.
+    - Are members 01–14 exchangeable among themselves, even if 00 isn't?
+    - The rank histogram (6.3) implicitly treats the observation as one more exchangeable draw from the ensemble. What does a non-exchangeable control member do to it? Should 00 be included?
+    - Link to martingale posteriors: exchangeability is a core assumption there too.

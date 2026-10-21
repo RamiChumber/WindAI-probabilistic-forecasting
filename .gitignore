@@ -1,0 +1,13 @@
+/data/
+exercises/
+resources/
+experiments/results/
+notebooks/scratch/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.egg-info/
+.env
+*.aux
+*.log
+*.pdf
