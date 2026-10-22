@@ -4,6 +4,7 @@ from windai.paths import get_data_root
 
 valid_zones = ["ELSPOT NO1", "ELSPOT NO2", "ELSPOT NO3", "ELSPOT NO4"]
 target = "wind_power_per_bidzone.parquet"
+parks = "windparks_bidzone.csv"
 
 # Loads the dataset with the target variable. Time filtering gives rows for [start, end). Takes naive timestamps
 def load_power(zone=None, start=None, end=None):
@@ -44,5 +45,13 @@ def load_meps_nowcast(sids=None, columns=None, time_ref=None):
     return
 
 # Loads the park-to-zone mapping
-def load_parks():
-    return
+def load_parks(zone=None):
+    if zone:
+        if zone not in valid_zones:
+            raise ValueError(f"Please input a valid bidding zone ({valid_zones}), or leave 'zone' blank")
+    df = pd.read_csv(get_data_root() / parks, encoding="utf-8")
+    df["prod_start_new"] = pd.to_datetime(df["prod_start_new"], utc=True)
+    if zone:
+        return df.loc[df["bidding_area"] == zone]
+    else:
+        return df

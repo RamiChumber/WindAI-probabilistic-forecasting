@@ -2,9 +2,10 @@ import pytest
 import pandas as pd
 import datetime
 import re
-from windai.data.dataset_loader import load_power, valid_zones, target
+from windai.data.dataset_loader import load_power, load_parks, valid_zones
 
-def test_format():
+# Tests for load_power()
+def test_power_format():
     power_df = load_power()
     assert power_df.index.name == "time"
     assert isinstance(power_df.index, pd.DatetimeIndex)
@@ -12,16 +13,16 @@ def test_format():
     assert list(power_df.columns.values) == valid_zones
     assert len(power_df.index) == 46011
 
-def test_zone_filter():
+def test_power_zone_filter():
     power_df = load_power(zone="ELSPOT NO3")
     assert list(power_df.columns.values) == ['ELSPOT NO3']
     assert power_df.index.tz == datetime.timezone.utc
     
-def test_invalid_zone():
+def test_power_invalid_zone():
     with pytest.raises(ValueError, match=re.escape(f"Please input a valid bidding zone ({str(valid_zones)}), or leave 'zone' blank")):
         load_power(zone="NO3")
 
-def test_double_time_filter():
+def test_power_double_time_filter():
     start = pd.Timestamp("2024-01-01")
     end = pd.Timestamp("2024-01-02")
     power_df = load_power(start=start, end=end)
@@ -30,7 +31,7 @@ def test_double_time_filter():
     assert end.tz_localize("UTC") not in power_df.index
     assert len(power_df.index) == 24
 
-def test_start_filter():
+def test_power_start_filter():
     start = pd.Timestamp("2024-02-01")
     power_df = load_power(start=start)
     control_df = load_power()
@@ -39,7 +40,7 @@ def test_start_filter():
     assert power_df.index.max() == load_power().index.max()
     assert len(power_df.index) == len(control_df.index)
                           
-def test_end_filter():
+def test_power_end_filter():
     end = pd.Timestamp("2024-03-01")
     power_df = load_power(end=end)
     control_df = load_power()
@@ -47,3 +48,24 @@ def test_end_filter():
     assert power_df.index.max() == end.tz_localize("UTC") - pd.Timedelta(1, 'h')
     assert power_df.index.min() == load_power().index.min()
     assert len(power_df.index) == len(control_df.index)
+    
+# Tests for load_parks()
+def test_park_format():
+    park_df = load_parks()
+    assert len(park_df.index) == 76
+    assert list(park_df.columns) == ["bidding_area", "substation_name", "operating_power_max", "prod_start_new", "eic_code"]
+    assert park_df["prod_start_new"].dt.tz == datetime.timezone.utc
+
+def test_park_valid_zones():
+    park_df = load_parks()
+    assert park_df["bidding_area"].isin(valid_zones).all()
+
+def test_park_zone_filter():
+    park_df = load_parks(zone="ELSPOT NO3")
+    control_df = load_parks()
+    assert (park_df["bidding_area"] == "ELSPOT NO3").all()
+    assert len(park_df.index) == len(control_df.loc[control_df["bidding_area"] == "ELSPOT NO3"])
+
+def test_park_invalid_zone():
+    with pytest.raises(ValueError, match=re.escape(f"Please input a valid bidding zone ({valid_zones}), or leave 'zone' blank")):
+        load_parks("NO3")
