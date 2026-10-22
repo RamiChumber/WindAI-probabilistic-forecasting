@@ -1,20 +1,48 @@
 import pyarrow.parquet as pq
 import pandas as pd
-from pathlib import Path
-from windai.paths import get_data_root, list_files
+from windai.paths import get_data_root
 
-def load_power(zone=None, time_ref=None):
-    flist = list_files()
-    power_dataset = [x.absolute() for x in flist if x.name == "wind_power_per_bidzone.parquet"]
-    pq_file = pq.ParquetFile(power_dataset[0])
-    pq_table = pq_file.read()
-    return pq_table.to_pandas()
+valid_zones = ["ELSPOT NO1", "ELSPOT NO2", "ELSPOT NO3", "ELSPOT NO4"]
+target = "wind_power_per_bidzone.parquet"
 
+# Loads the dataset with the target variable. Time filtering gives rows for [start, end). Takes naive timestamps
+def load_power(zone=None, start=None, end=None):
+    pq_file = pq.ParquetFile(get_data_root() / target)
+    if zone:
+        if zone not in valid_zones:
+            raise ValueError(f"Please input a valid bidding zone ({valid_zones}), or leave 'zone' blank")
+        pq_table = pq_file.read(columns=[zone], use_pandas_metadata=True)
+    else:
+        pq_table = pq_file.read(use_pandas_metadata=True)
+    
+    df = pq_table.to_pandas()
+    df.index.name = "time"
+    df.index = df.index.tz_localize("UTC")
+    
+    if start:
+        start = pd.Timestamp(start)
+        start = start.tz_localize("UTC")
+    if end:
+        end = pd.Timestamp(end)
+        end = end.tz_localize("UTC")
+    if start and end:
+        return df.loc[(df.index >= start) & (df.index < end)]
+    elif start:
+        return df.loc[df.index >= start]
+    elif end:
+        return df.loc[df.index < end]
+    else:
+        return df
+
+
+# Loads the MEPS forecast dataset
 def load_meps_forecast(sids=None, columns=None, time_ref_range=None):
     return
 
+# Loads the MEPS nowcast dataset
 def load_meps_nowcast(sids=None, columns=None, time_ref=None):
     return
 
+# Loads the park-to-zone mapping
 def load_parks():
     return
