@@ -1,6 +1,7 @@
 import pyarrow.parquet as pq
 import pandas as pd
 from pathlib import Path
+from windai.paths import get_data_root, list_files
 
 def load_power(zone=None, time_ref=None):
     flist = list_files()
