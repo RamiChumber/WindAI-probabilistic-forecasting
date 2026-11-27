@@ -41,7 +41,7 @@ def test_alignment_weights_sum_to_one():
     assert w.sum() == pytest.approx(1) and (w > 0).all()
 
 
-# The fit recovers the curve, the cut-out and the alignment weights it was generated with (D7, D11)
+# The fit recovers the curve, the cut-out and the alignment weights it was generated with
 def test_fit_recovers_known_curve():
     wind, power, parks = synthetic_fit_data()
     curve = fit_power_curve("2030-01-01", zones=[ZONE], wind=wind, power=power, parks=parks)
@@ -75,7 +75,7 @@ def test_fit_respects_until():
 
 
 # By hand: one issue, two parks, alignment weight only on t, one park not yet in operation at issue time.
-# p must be the capacity-weighted mean of f(ws) over the parks in operation (D5).
+# p must be the capacity-weighted mean of f(ws) over the parks in operation.
 def test_add_power_ensemble_by_hand():
     lts = np.arange(33, 63)
     issue = pd.DatetimeIndex([pd.Timestamp("2020-02-01 12:00", tz="UTC")]).as_unit("ns")

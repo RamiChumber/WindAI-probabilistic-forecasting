@@ -13,7 +13,7 @@ def score_rows(forecast, y):
     if y.shape != (len(forecast),):
         raise ValueError(f"y has shape {y.shape}, expected ({len(forecast)},)")
     rows = forecast.keys.copy()
-    rows["issue_hour"] = rows["issue_time"].dt.hour       # regime (12Z / 09Z), for grouping (D3)
+    rows["issue_hour"] = rows["issue_time"].dt.hour       # issue regime (12Z / 09Z), for grouping
     rows["y"] = y
     rows["sq_error"] = (forecast.point - y) ** 2
     rows["abs_error"] = np.abs(forecast.point - y)

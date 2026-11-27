@@ -5,11 +5,10 @@ from windai.evaluation.forecast import Forecast, QUANTILE_LEVELS
 # EMOS (Gneiting et al., 2005): a parametric predictive distribution whose location and scale are linear in
 # ensemble statistics, e.g. mu = a + b * mean(p), sigma^2 = c + d * var(p), fitted by minimising mean CRPS
 # over a training window.
-# Decisions to make first (notes/decisions.md):
-#   - distribution and support (Set 1, 4.1): power is bounded by 0 and capacity
-#   - scale: MW or capacity factor (Set 1, 2.6)
-#   - how member 00 enters the predictors (Set 1, 6.4 and your supervisor's note)
-#   - training window: rolling length or expanding (Set 1, Part 8)
+# Here: a censored normal on [0, 1] in capacity factor (power is bounded by 0 and capacity), fitted per zone
+# and UTC target hour. Location from the mean of all 15 members; scale from the spread of members 01-14, the
+# exchangeable ones (member 00, the unperturbed control run, sits in the middle of the ensemble and would
+# understate the spread). Still open: the training window (rolling or all training data).
 # Fill Forecast.quantiles from the fitted distribution's quantile function at QUANTILE_LEVELS. If your
 # distribution has a closed-form CRPS, also pass crps_fn=lambda y: <CRPS of each row's distribution at y>.
 # You need that formula anyway as the training objective.

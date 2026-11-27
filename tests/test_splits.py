@@ -7,7 +7,7 @@ from windai.utils.synthetic import make_synthetic_dataset
 
 def test_purge_at_val_boundary(synthetic_df):
     train = training_rows(synthetic_df, "val")
-    # Issues on 30 and 31 Mar have targets in the val fold: purged (D2)
+    # Issues on 30 and 31 Mar have targets in the val fold: purged
     assert train["issue_date"].max() == datetime.date(2023, 3, 29)
     assert (train["target_time"] < pd.Timestamp("2023-03-31 22:00", tz="UTC")).all()   # 1 Apr 00:00 local
     assert set(train["fold"]) == {"train"}

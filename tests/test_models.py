@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from windai.evaluation.forecast import Forecast
+from windai.evaluation.forecast import Forecast, QUANTILE_LEVELS
 from windai.models.baselines import Persistence, Climatology, RawEnsemble
 from windai.models.EMOS import EMOS
 
@@ -33,10 +33,44 @@ def test_contract(model_cls, train_df, test_df):
     assert np.all(forecast.quantiles <= capacity + 1e-6)
 
 
-def test_persistence_repeats_last_power(train_df, test_df):
+# Probabilistic persistence: the point forecast is the last observation
+def test_persistence_point_is_last_power(train_df, test_df):
     forecast = fit_predict(Persistence, train_df, test_df)
     np.testing.assert_allclose(forecast.point, test_df["last_power"])
+
+
+# With zero training errors the error distribution is a point mass, so every quantile is the last observation
+def test_persistence_without_errors_is_point_mass(train_df, test_df):
+    forecast = fit_predict(Persistence, train_df.assign(cf=train_df["last_cf"]), test_df)
     np.testing.assert_allclose(forecast.quantiles, np.repeat(test_df["last_power"].to_numpy()[:, None], 99, axis=1))
+
+
+# The quantiles are last_cf + the training error quantiles of the row's zone and UTC hour, x capacity
+def test_persistence_adds_error_quantiles(train_df, test_df):
+    forecast = fit_predict(Persistence, train_df, test_df)
+    row = test_df.iloc[0]
+    g = train_df[(train_df["zone"] == row["zone"]) & (train_df["target_hour_utc"] == row["target_hour_utc"])]
+    err = np.quantile(g["cf"] - g["last_cf"], QUANTILE_LEVELS)
+    expected = np.clip(row["last_cf"] + err, 0, 1) * row["capacity_mw"]
+    np.testing.assert_allclose(forecast.quantiles[0], expected)
+
+
+# A row without any earlier observation still gets a finite forecast (the zone's training mean CF)
+def test_persistence_without_observation(train_df, test_df):
+    rows = test_df.head(3).assign(last_cf=np.nan, last_power=np.nan)
+    forecast = fit_predict(Persistence, train_df, rows)
+    assert np.isfinite(forecast.point).all() and np.isfinite(forecast.quantiles).all()
+
+
+# Climatology pools hours h-1, h, h+1 within the month: predicting a training row reproduces that cell
+def test_climatology_cell_is_pooled_month_hour(train_df):
+    forecast = fit_predict(Climatology, train_df, train_df.head(1))
+    row = train_df.iloc[0]
+    h = row["target_hour_utc"]
+    cell = train_df[(train_df["zone"] == row["zone"]) & (train_df["target_time"].dt.month == row["target_time"].month)
+                    & train_df["target_hour_utc"].isin([(h - 1) % 24, h, (h + 1) % 24])]
+    np.testing.assert_allclose(forecast.quantiles[0], np.quantile(cell["cf"], QUANTILE_LEVELS) * row["capacity_mw"])
+    assert forecast.point[0] == pytest.approx(cell["cf"].mean() * row["capacity_mw"])
 
 
 # Climatology works on capacity factor, so doubling the installed capacity doubles the forecast
@@ -55,7 +89,7 @@ def test_climatology_ignores_ensemble(train_df, test_df):
     np.testing.assert_allclose(other.quantiles, base.quantiles)
 
 
-# The members p_XX are capacity factors; the Forecast is in MW (D9), so the samples are members x capacity
+# The members p_XX are capacity factors; the Forecast is in MW, so the samples are members x capacity
 def test_raw_ensemble_returns_members(train_df, test_df):
     forecast = fit_predict(RawEnsemble, train_df, test_df)
     assert forecast.samples is not None

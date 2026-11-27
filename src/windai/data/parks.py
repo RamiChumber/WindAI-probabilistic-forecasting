@@ -5,10 +5,10 @@ import pyarrow.parquet as pq
 from windai.paths import get_data_root
 from windai.data.dataset_loader import load_parks, MEPS_NOWCAST, STORED_TO_CANONICAL_NAMES
 
-# Parks and installed capacity (D1, D5).
+# Parks and installed capacity.
 
 
-# Names of the parks with weather data. The forecast and the nowcast have exactly the same 61 parks (C3), and the
+# Names of the parks with weather data. The forecast and the nowcast have exactly the same 61 parks, and the
 # nowcast is much smaller to read; its park column is read dictionary-encoded (one code per row, names once).
 @lru_cache(maxsize=1)
 def weather_parks():
@@ -18,7 +18,7 @@ def weather_parks():
 
 
 # One row per park. The metadata lists some parks under several EIC codes, each row repeating the park's full
-# capacity, so it is deduplicated by name, not by EIC code (Øyfjell1/2 share a code but are two phases) (D1, C3).
+# capacity, so it is deduplicated by name, not by EIC code (Øyfjell1/2 share a code but are two phases).
 def parks_table():
     df = load_parks().drop_duplicates("substation_name")
     out = pd.DataFrame({
@@ -33,7 +33,7 @@ def parks_table():
 
 
 # Matrix of each park's capacity in operation at each time, shape (len(times), len(parks)): capacity_mw where
-# prod_start <= t, else 0. Capacity is constant from start-up (no decommissioning or derating, D1).
+# prod_start <= t, else 0. Capacity is constant from start-up (no decommissioning or derating).
 def capacity_matrix(parks, times):
     times = pd.DatetimeIndex(times)
     times = times.tz_localize("UTC") if times.tz is None else times.tz_convert("UTC")
@@ -44,7 +44,7 @@ def capacity_matrix(parks, times):
 
 
 # Installed capacity of a zone at each time. covered_only=True counts only parks with weather data, the
-# denominator of the zone ensemble (D5); the default counts all parks, the denominator of the target CF (D1).
+# denominator of the zone ensemble; the default counts all parks, the denominator of the target CF.
 def capacity_at(parks, zone, times, covered_only=False):
     sel = parks["zone"] == zone
     if covered_only:

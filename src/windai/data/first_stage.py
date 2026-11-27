@@ -8,16 +8,16 @@ from windai.data.dataset_loader import load_power, MEPS_NOWCAST, STORED_TO_CANON
 from windai.data.parks import parks_table, capacity_matrix
 from windai.data.timing import TZ
 
-# First stage: weather -> power (D7, D11).
+# First stage: weather -> power.
 # One power curve per zone, applied per park, aggregated with capacity weights:
 #   park CF(t) = w_prev f(ws(t-1)) + w_0 f(ws(t)) + w_next f(ws(t+1))
 #   f(ws)      = [a / (1 + exp(-(ws - c) / s)) + d] * 1 / (1 + exp((ws - c_out) / s_out))
 #   zone CF(t) = sum_p cap_p park CF_p(t) / sum_p cap_p      over parks with weather data in operation
 # The first factor is the rise from cut-in to rated power; the second is the cut-out: ~1 below c_out, falling
-# towards 0 above it, as turbines shut down in storms (zone CF drops above ~12 m/s, D7 amended 27 Nov 2026).
+# towards 0 above it, as turbines shut down in storms (zone CF drops again above ~12 m/s).
 # Park power isn't observed, so the curve is fitted through the zone total, on Nowcast (observed weather).
 # The weights (w >= 0, sum 1) are a softmax of (l_prev, 0, l_next); fitting them covers both power timestamp
-# conventions, and the fitted values are a second test of C9.
+# conventions ([t, t+1) or (t-1, t]), and the fitted values indicate which one the data follow.
 
 PARAMS = ["a", "c", "s", "d", "c_out", "s_out", "l_prev", "l_next"]
 X0 = np.array([0.9, 8.0, 1.5, 0.0, 20.0, 2.0, 0.0, 0.0])      # c_out = 20 m/s: starts with no cut-out in range
@@ -26,7 +26,7 @@ UPPER = np.array([1.2, 25.0, 10.0, 0.3, 40.0, 10.0, 10.0, 10.0])
 N_CURVE = 6                                                     # parameters of f; the rest are alignment logits
 # The cut-out is only fitted where the training data reach it: at least CUTOUT_MIN_HOURS hours with zone wind
 # above CUTOUT_WIND. Otherwise (NO1: zone wind never above 10 m/s before Apr 2023) a fitted cut-out would sit
-# beyond the data, so it is fixed out of range and the plateau continues (D7 amended 27 Nov 2026).
+# beyond the data, so it is fixed out of range and the plateau continues.
 CUTOUT_WIND, CUTOUT_MIN_HOURS = 12.0, 50
 NO_CUTOUT = (40.0, 1.0)                                         # c_out, s_out: factor ~1 for any realistic wind
 CUTOUT_IDX = [4, 5]
@@ -92,8 +92,8 @@ def load_nowcast_wind():
 
 
 # Fits one curve per zone on Nowcast and zone CF for the power labels before `until` (a local date, the
-# boundary of the fit, D2/D7). Capacity here is the capacity in operation at hour t: this is a fit on history,
-# so the issue-time rule (D1) doesn't apply. Hours with missing power or nowcast are dropped (D10).
+# boundary of the fit). Capacity here is the capacity in operation at hour t: this is a fit on history, not a
+# forecast, so the issue-time rule doesn't apply. Hours with missing power or nowcast are dropped.
 def fit_power_curve(until, zones=VALID_ZONES, wind=None, power=None, parks=None):
     until = pd.Timestamp(until, tz=TZ).tz_convert("UTC")
     wind = load_nowcast_wind() if wind is None else wind
@@ -148,8 +148,9 @@ def zone_weighted(values, capw):
         return out / np.where(total > 0, total, np.nan)[:, None, None]
 
 
-# Adds p_00..p_14 (zone CF per member, D5) to a base table, from the wind cube and a fitted curve. Parks are
-# weighted by their capacity in operation at issue time (D1/D5). Computed zone by zone to bound memory.
+# Adds p_00..p_14 (zone CF per member) to a base table, from the wind cube and a fitted curve. Summing within
+# each member keeps the spatial dependence between parks. Parks are weighted by their capacity in operation at
+# issue time. Computed zone by zone to bound memory.
 def add_power_ensemble(table, cube, curve, parks=None):
     parks = parks_table() if parks is None else parks
     table = table.copy()

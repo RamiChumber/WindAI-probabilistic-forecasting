@@ -1,6 +1,6 @@
 """Fit every model on the training rows of a fit, forecast its evaluation fold and write a score table.
 
-A fit names what is evaluated (D2, D12):
+A fit names what is evaluated:
     val     fit on train (purged at 1 Apr 2023), score the validation fold      (default)
     test    refit on train + val (purged at 1 Apr 2024), score the test fold    (only with --test)
     windai  refit on everything up to 31 Mar 2025, score the competition period (only with --windai)
@@ -40,7 +40,7 @@ def run(df, fit="val", models=MODELS, by=("zone",)):
             print(f"{model.name}: skipped, not implemented")
             continue
         y = target["power"].to_numpy()
-        # Overall per zone, and per regime (12Z / 09Z), since val contains both (D3)
+        # Overall per zone, and per issue regime (12Z / 09Z), since val contains both
         for group in (by, (*by, "issue_hour")):
             table = score(forecast, y, by=group).reset_index()
             table.insert(0, "model", model.name)

@@ -14,7 +14,7 @@ def _power_curve(ws):
 # A small fake version of the build_dataset() table (windai.data.build + p_00..p_14), for tests and for running
 # the experiment script without the real caches. Same columns and conventions as the real table: one row per
 # (issue_time, zone, UTC target_time), D+2 in local time (23/24/25 hours), folds by local issue date, members
-# p_XX and the target cf in capacity factor, power and capacity in MW, capacity fixed at issue time (D1).
+# p_XX and the target cf in capacity factor, power and capacity in MW, capacity fixed at issue time.
 # Daily 09Z issues. Numbers are made up; only the schema and rough behaviour are realistic: the ensemble is
 # under-dispersive and biased, power is bounded by [0, capacity] and capacity grows over time.
 def make_synthetic_dataset(n_issues=365, start="2022-10-01", seed=0):

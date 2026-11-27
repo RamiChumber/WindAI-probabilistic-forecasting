@@ -9,7 +9,7 @@ def parks():
     return parks_table()
 
 
-# Deduplicated by name (D1, C3): 76 metadata rows, 65 parks
+# Deduplicated by name: 76 metadata rows, 65 parks
 def test_one_row_per_park(parks):
     assert len(parks) == 65
     assert parks["park"].is_unique
@@ -25,7 +25,7 @@ def test_parks_without_weather(parks):
     assert no_weather == {"Hinnøy", "Håvik", "Orkdal", "Ramslandsvågen"}
 
 
-# Final installed capacity per zone (C3 findings)
+# Final installed capacity per zone
 @pytest.mark.parametrize("zone, mw", [("ELSPOT NO1", 405.7), ("ELSPOT NO2", 1451.3),
                                       ("ELSPOT NO3", 2120.4), ("ELSPOT NO4", 1160.0)])
 def test_final_capacity(parks, zone, mw):

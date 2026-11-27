@@ -10,7 +10,7 @@ ISSUES = {
     "2021-01-15 12:00": ("train", 24),    # 12Z, winter
     "2024-03-29 09:00": ("val", 23),      # D+2 = 31 Mar 2024, spring DST
     "2024-10-25 09:00": ("test", 25),     # D+2 = 27 Oct 2024, autumn DST
-    "2023-06-13 12:00": (None, 0),        # truncated 12Z issue (max lt 36): dropped (D10)
+    "2023-06-13 12:00": (None, 0),        # truncated 12Z issue (max lt 36): dropped
 }
 
 
@@ -42,7 +42,7 @@ def test_columns_and_features(table):
     assert np.isfinite(ws).all() and (ws >= 0).all() and (ws < 50).all()
 
 
-# Capacity is the issue-time capacity of all parks (D1); the covered capacity is no larger
+# Capacity is the issue-time capacity of all parks; the capacity of parks with weather data is no larger
 def test_capacity_at_issue_time(table):
     parks = parks_table()
     for (issue, zone), g in table.groupby(["issue_time", "zone"]):

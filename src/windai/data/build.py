@@ -1,4 +1,4 @@
-"""Builds the model table: one row per (issue, zone, target hour). Decisions D1-D12 in notes/decisions.md.
+"""Builds the model table: one row per (issue, zone, target hour).
 
 Three products:
   wind cube   member wind ws10m per (issue, park, lt, member), lt 33-62    data/processed/wind_cube_{split}.npz
@@ -25,7 +25,7 @@ from windai.data.first_stage import fit_power_curve, add_power_ensemble, zone_we
 from windai.data.splits import FIT_BOUNDARY
 
 PROCESSED = Path(__file__).resolve().parents[3] / "data" / "processed"
-CUBE_LTS = np.arange(33, 63)          # D+2 +- 1 h for both regimes: 12Z needs 33-59, 09Z 36-62 (C1)
+CUBE_LTS = np.arange(33, 63)          # D+2 +- 1 h for both regimes: 12Z needs 33-59, 09Z 36-62
 WS_COLS = [f"ws10m_{m:02d}" for m in range(N_MEMBERS)]
 
 
@@ -98,7 +98,8 @@ def load_cube(path):
 
 # ---------------------------------------------------------------- base table
 
-# Issues whose forecasts cover D+2 +- 1 h for every park and member (D10 drops the truncated ones, C1)
+# Issues whose forecasts cover D+2 +- 1 h for every park and member; truncated runs and incomplete ensembles
+# are dropped
 def usable_issues(cube):
     keep = []
     for i, issue in enumerate(cube["issues"]):
@@ -110,7 +111,7 @@ def usable_issues(cube):
 
 
 def _last_power(series, limit):
-    """Latest non-missing value with label <= limit, and its time (D6). (NaN, NaT) if there is none."""
+    """Latest non-missing value with label <= limit, and its time. (NaN, NaT) if there is none."""
     s = series.dropna()
     pos = s.index.searchsorted(limit, side="right") - 1
     return (s.iloc[pos], s.index[pos]) if pos >= 0 else (np.nan, pd.NaT)
@@ -143,7 +144,8 @@ def build_base_table(split="train", issues=None, cube=None, parks=None, power=No
     df["last_power_time"] = pd.to_datetime(df["last_power_time"], utc=True).dt.as_unit("ns")
     df["fold"] = "windai" if split == "eval" else fold_of(df["issue_date"])
 
-    # Capacity at issue time (D1): all parks for the target CF, covered parks for the ensemble (D5)
+    # Capacity at issue time, so no forecast uses later expansions: all parks for the target CF, parks with
+    # weather data for the ensemble
     df["capacity_mw"] = np.nan
     df["capacity_cov_mw"] = np.nan
     for zone in VALID_ZONES:
@@ -154,7 +156,7 @@ def build_base_table(split="train", issues=None, cube=None, parks=None, power=No
     df["cf"] = df["power"] / df["capacity_mw"]
     df["last_cf"] = df["last_power"] / df["capacity_mw"]
 
-    # Zone wind per member at t: capacity-weighted mean over covered parks in operation at issue time (D11)
+    # Zone wind per member at t: capacity-weighted mean over parks with weather data in operation at issue time
     ws_cols = [f"ws_{m:02d}" for m in range(N_MEMBERS)]
     ws_out = np.full((len(df), N_MEMBERS), np.nan)
     cube_parks = list(cube["parks"])
@@ -174,7 +176,7 @@ def build_base_table(split="train", issues=None, cube=None, parks=None, power=No
 
 
 def check_base_table(df):
-    """Leakage, consistency and row-count asserts (02_pipeline P4, D2, D6, D10)."""
+    """Leakage, consistency and row-count asserts."""
     keys = ["issue_time", "zone", "target_time"]
     assert not df.duplicated(keys).any(), "duplicate (issue_time, zone, target_time) rows"
     lead = ((df["target_time"] - df["issue_time"]) / pd.Timedelta(hours=1)).astype(int)
@@ -216,7 +218,7 @@ def load_base(split="train"):
 
 
 # The model table for one fit: the cached base table plus p_00..p_14 from a curve fitted on the training period
-# of that fit ("val": train fold, "test": train + val, "windai": everything up to 31 Mar 2025; D2, D7).
+# of that fit ("val": train fold, "test": train + val, "windai": everything up to 31 Mar 2025).
 def load_dataset(split="train", fit="val", curve=None):
     base, cube = load_base(split), load_cube(cube_path(split))
     curve = fit_power_curve(FIT_BOUNDARY[fit]) if curve is None else curve
