@@ -1,6 +1,4 @@
 /data/
-exercises/
-resources/
 experiments/results/
 notebooks/scratch/
 __pycache__/
@@ -11,3 +9,4 @@ __pycache__/
 *.aux
 *.log
 *.pdf
+*.md
