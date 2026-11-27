@@ -203,3 +203,55 @@ def test_log_likelihood_grad(y):
     num_mu = (cn.log_likelihood(y, mu + eps, sigma) - cn.log_likelihood(y, mu - eps, sigma)) / (2 * eps)
     num_sigma = (cn.log_likelihood(y, mu, sigma + eps) - cn.log_likelihood(y, mu, sigma - eps)) / (2 * eps)
     assert d_mu == pytest.approx(num_mu, rel=1e-5) and d_sigma == pytest.approx(num_sigma, rel=1e-5)
+
+
+# ---------------------------------------------------------------- seasonal EMOS
+
+from windai.models.EMOS import SeasonalEMOS, SEASONAL_PARAMS, season_basis, seasonal_location_scale
+
+TRUE_SEASONAL = dict(a0=0.05, a1=0.03, a2=-0.02, b0=0.9, b1=-0.1, b2=0.05, c=0.06, d=1.5, g1=0.4, g2=-0.3)
+
+
+def seasonal_data(seed=0, n=8000, seasonal=True):
+    df = model_data(seed, n)
+    df["target_time"] = pd.Timestamp("2021-01-01", tz="UTC") + pd.to_timedelta(
+        np.random.default_rng(seed + 1).uniform(0, 3 * 365, n), unit="D")
+    if seasonal:
+        theta = np.array([TRUE_SEASONAL[k] for k in SEASONAL_PARAMS])
+        m, s2 = df[ALL_MEMBERS].mean(axis=1).to_numpy(), df[ALL_MEMBERS[1:]].var(axis=1, ddof=1).to_numpy()
+        mu, sigma, _ = seasonal_location_scale(theta, m, s2, season_basis(df["target_time"]))
+        df["cf"] = np.clip(np.random.default_rng(seed + 2).normal(mu, sigma), 0, 1)
+    return df
+
+
+def test_seasonal_fit_recovers_parameters():
+    p = SeasonalEMOS().fit(seasonal_data()).summary().iloc[0]
+    assert p["converged"]
+    tol = dict(a0=0.02, a1=0.015, a2=0.015, b0=0.05, b1=0.04, b2=0.04, c=0.01, d=0.25, g1=0.1, g2=0.1)
+    for k in SEASONAL_PARAMS:
+        assert p[k] == pytest.approx(TRUE_SEASONAL[k], abs=tol[k]), k
+
+
+# Without a seasonal cycle in the data, the harmonics come out near zero and the rest matches static EMOS
+def test_seasonal_without_season_matches_static():
+    df = seasonal_data(seasonal=False)
+    p = SeasonalEMOS().fit(df).summary().iloc[0]
+    s = EMOS().fit(df).summary().iloc[0]
+    for k in ("a1", "a2", "b1", "b2"):
+        assert abs(p[k]) < 0.03, k
+    for k in ("g1", "g2"):
+        assert abs(p[k]) < 0.1, k
+    for k, ks in (("a0", "a"), ("b0", "b"), ("c", "c"), ("d", "d")):
+        assert p[k] == pytest.approx(s[ks], abs=0.03), k
+
+
+# The analytic gradient of the seasonal objective matches finite differences
+def test_seasonal_gradient():
+    from scipy.optimize import check_grad
+    from windai.models.EMOS import seasonal_nll
+    df = seasonal_data(n=500)
+    m, s2 = df[ALL_MEMBERS].mean(axis=1).to_numpy(), df[ALL_MEMBERS[1:]].var(axis=1, ddof=1).to_numpy()
+    args = (df["cf"].to_numpy(), m, s2, season_basis(df["target_time"]))
+    theta = np.array([TRUE_SEASONAL[k] for k in SEASONAL_PARAMS]) + 0.02
+    err = check_grad(lambda x: seasonal_nll(x, *args)[0], lambda x: seasonal_nll(x, *args)[1], theta)
+    assert err < 1e-5

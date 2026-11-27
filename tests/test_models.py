@@ -2,11 +2,11 @@ import numpy as np
 import pytest
 from windai.evaluation.forecast import Forecast, QUANTILE_LEVELS
 from windai.models.baselines import Persistence, Climatology, RawEnsemble
-from windai.models.EMOS import EMOS
+from windai.models.EMOS import EMOS, SeasonalEMOS
 
 # These tests define "done" for each model. A model that still raises NotImplementedError is reported as
 # xfail ("not implemented yet"), so the number of xfails is your remaining work. Any other error is a failure.
-ALL_MODELS = [Persistence, Climatology, RawEnsemble, EMOS]
+ALL_MODELS = [Persistence, Climatology, RawEnsemble, EMOS, SeasonalEMOS]
 MEMBERS = [f"p_{i:02d}" for i in range(15)]
 
 

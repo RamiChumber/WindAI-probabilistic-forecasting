@@ -70,6 +70,11 @@ def censored_forecast(df, theta):
     """Forecast in MW from per-row parameters theta (n, 4), with the exact CRPS and PIT attached."""
     m, s2 = ensemble_stats(df)
     mu, sigma = location_scale(np.asarray(theta, dtype=float).T, m, s2)
+    return forecast_from_location_scale(df, mu, sigma)
+
+
+def forecast_from_location_scale(df, mu, sigma):
+    """Forecast in MW from per-row censored-normal parameters (capacity factor scale)."""
     cap = df["capacity_mw"].to_numpy()
     quantiles = cn.quantile(QUANTILE_LEVELS[None, :], mu[:, None], sigma[:, None]) * cap[:, None]
     point = cn.mean(mu, sigma) * cap
@@ -175,3 +180,83 @@ class RollingEMOS(Model):
         keys = pd.MultiIndex.from_arrays([issue_dates, df["zone"], df["target_hour_utc"]])
         p = self.params_by_issue.set_index(["issue_date", "zone", "target_hour_utc"]).reindex(keys)
         return censored_forecast(df, p[["a", "b", "c", "d"]].to_numpy())
+
+
+# Seasonal EMOS: static EMOS with one annual harmonic in the intercept, the ensemble-mean coefficient and the
+# log scale, to test whether the coefficients' drift over time is a seasonal cycle:
+#   mu      = a(t) + b(t) * mean(p_00..p_14)
+#   sigma^2 = (c^2 + d^2 * var(p_01..p_14)) * exp(g(t))
+#   x(t)    = x0 + x1 sin(2 pi t) + x2 cos(2 pi t)   for a and b;  g(t) = g1 sin(2 pi t) + g2 cos(2 pi t)
+# t is the target time in years since 1 January. One fit per zone and UTC hour, by maximum likelihood.
+SEASONAL_PARAMS = ["a0", "a1", "a2", "b0", "b1", "b2", "c", "d", "g1", "g2"]
+
+
+def season_basis(target_time):
+    """Columns 1, sin(2 pi t), cos(2 pi t), with t the fraction of the year at each target time."""
+    t = pd.to_datetime(target_time)
+    frac = ((t.dt.dayofyear.to_numpy() - 1) + t.dt.hour.to_numpy() / 24.0) / 365.25
+    return np.column_stack([np.ones(len(t)), np.sin(2 * np.pi * frac), np.cos(2 * np.pi * frac)])
+
+
+def seasonal_location_scale(theta, m, s2, B):
+    A, Bc, (c, d), G = theta[0:3], theta[3:6], theta[6:8], theta[8:10]
+    v = c * c + d * d * s2
+    return B @ A + (B @ Bc) * m, np.sqrt(v) * np.exp(0.5 * (B[:, 1:] @ G)), v
+
+
+def seasonal_nll(theta, y, m, s2, B):
+    """Mean negative log-likelihood of seasonal EMOS and its analytic gradient."""
+    c, d = theta[6], theta[7]
+    mu, sigma, v = seasonal_location_scale(theta, m, s2, B)
+    d_mu, d_sigma = cn.log_likelihood_grad(y, mu, sigma)
+    grad = np.concatenate([B.T @ d_mu, B.T @ (d_mu * m),
+                           [(d_sigma * sigma * c / v).sum(), (d_sigma * sigma * d * s2 / v).sum()],
+                           B[:, 1:].T @ (0.5 * d_sigma * sigma)]) / len(y)
+    return -cn.log_likelihood(y, mu, sigma).mean(), -grad
+
+
+def fit_seasonal(y, m, s2, B, x0=None):
+    """Fits the 10 seasonal EMOS parameters by maximum likelihood, starting from the static fit."""
+    if x0 is None:
+        a, b, c, d = fit_censored(y, m, s2)[0]
+        x0 = np.array([a, 0, 0, b, 0, 0, c, d, 0, 0], dtype=float)
+
+    # The seasonal scale factor exp(g) is bounded to keep the optimiser away from overflow
+    bounds = [(None, None)] * 8 + [(-5, 5)] * 2
+    res = minimize(seasonal_nll, x0, args=(y, m, s2, B), method="L-BFGS-B", jac=True, bounds=bounds)
+    theta = res.x.copy()
+    theta[6:8] = np.abs(theta[6:8])
+    return theta, res.success, res.fun
+
+
+class SeasonalEMOS(Model):
+    name = "emos_seasonal"
+
+    def fit(self, train_df):
+        d = train_df.dropna(subset=["cf"])
+        m, s2 = ensemble_stats(d)
+        B = season_basis(d["target_time"])
+        y = np.clip(d["cf"].to_numpy(), 0.0, 1.0)
+        rows = []
+        for (zone, hour), idx in d.groupby(["zone", "target_hour_utc"]).indices.items():
+            theta, ok, loss = fit_seasonal(y[idx], m[idx], s2[idx], B[idx])
+            rows.append({"zone": zone, "target_hour_utc": hour, **dict(zip(SEASONAL_PARAMS, theta)),
+                         "converged": ok, "loss": loss, "n": len(idx)})
+        self.params = pd.DataFrame(rows).set_index(["zone", "target_hour_utc"]).sort_index()
+        return self
+
+    def summary(self):
+        return self.params.copy()
+
+    def predict(self, df):
+        keys = pd.MultiIndex.from_arrays([df["zone"], df["target_hour_utc"]])
+        p = self.params.reindex(keys)[SEASONAL_PARAMS]
+        if p.isna().any().any():
+            raise ValueError("no fitted seasonal EMOS parameters for some (zone, hour) in df")
+        theta = p.to_numpy().T
+        m, s2 = ensemble_stats(df)
+        B = season_basis(df["target_time"])
+        A, Bc, G = theta[0:3], theta[3:6], theta[8:10]
+        mu = (B * A.T).sum(1) + (B * Bc.T).sum(1) * m
+        sigma = np.sqrt(theta[6] ** 2 + theta[7] ** 2 * s2) * np.exp(0.5 * (B[:, 1:] * G.T).sum(1))
+        return forecast_from_location_scale(df, mu, sigma)
