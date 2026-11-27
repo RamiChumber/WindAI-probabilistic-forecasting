@@ -10,20 +10,38 @@ from windai.data.timing import TZ
 
 # First stage: weather -> power (D7, D11).
 # One power curve per zone, applied per park, aggregated with capacity weights:
-#   park CF(t) = w_prev f(ws(t-1)) + w_0 f(ws(t)) + w_next f(ws(t+1)),   f(ws) = a / (1 + exp(-(ws - c) / s)) + d
+#   park CF(t) = w_prev f(ws(t-1)) + w_0 f(ws(t)) + w_next f(ws(t+1))
+#   f(ws)      = [a / (1 + exp(-(ws - c) / s)) + d] * 1 / (1 + exp((ws - c_out) / s_out))
 #   zone CF(t) = sum_p cap_p park CF_p(t) / sum_p cap_p      over parks with weather data in operation
+# The first factor is the rise from cut-in to rated power; the second is the cut-out: ~1 below c_out, falling
+# towards 0 above it, as turbines shut down in storms (zone CF drops above ~12 m/s, D7 amended 27 Nov 2026).
 # Park power isn't observed, so the curve is fitted through the zone total, on Nowcast (observed weather).
 # The weights (w >= 0, sum 1) are a softmax of (l_prev, 0, l_next); fitting them covers both power timestamp
 # conventions, and the fitted values are a second test of C9.
 
-PARAMS = ["a", "c", "s", "d", "l_prev", "l_next"]
-X0 = np.array([0.9, 8.0, 1.5, 0.0, 0.0, 0.0])
-LOWER = np.array([0.0, 0.0, 0.1, 0.0, -10.0, -10.0])
-UPPER = np.array([1.2, 25.0, 10.0, 0.3, 10.0, 10.0])
+PARAMS = ["a", "c", "s", "d", "c_out", "s_out", "l_prev", "l_next"]
+X0 = np.array([0.9, 8.0, 1.5, 0.0, 20.0, 2.0, 0.0, 0.0])      # c_out = 20 m/s: starts with no cut-out in range
+LOWER = np.array([0.0, 0.0, 0.1, 0.0, 8.0, 0.3, -10.0, -10.0])
+UPPER = np.array([1.2, 25.0, 10.0, 0.3, 40.0, 10.0, 10.0, 10.0])
+N_CURVE = 6                                                     # parameters of f; the rest are alignment logits
+# The cut-out is only fitted where the training data reach it: at least CUTOUT_MIN_HOURS hours with zone wind
+# above CUTOUT_WIND. Otherwise (NO1: zone wind never above 10 m/s before Apr 2023) a fitted cut-out would sit
+# beyond the data, so it is fixed out of range and the plateau continues (D7 amended 27 Nov 2026).
+CUTOUT_WIND, CUTOUT_MIN_HOURS = 12.0, 50
+NO_CUTOUT = (40.0, 1.0)                                         # c_out, s_out: factor ~1 for any realistic wind
+CUTOUT_IDX = [4, 5]
 
 
 def logistic(ws, a, c, s, d):
     return a / (1 + np.exp(-(ws - c) / s)) + d
+
+
+def cutout(ws, c_out, s_out):
+    return 1 / (1 + np.exp((ws - c_out) / s_out))
+
+
+def power_curve(ws, a, c, s, d, c_out, s_out):
+    return logistic(ws, a, c, s, d) * cutout(ws, c_out, s_out)
 
 
 def alignment_weights(l_prev, l_next):
@@ -33,10 +51,9 @@ def alignment_weights(l_prev, l_next):
 
 
 def park_cf(theta, ws_prev, ws, ws_next):
-    a, c, s, d, l_prev, l_next = theta
+    curve, (l_prev, l_next) = theta[:N_CURVE], theta[N_CURVE:]
     w = alignment_weights(l_prev, l_next)
-    return (w[0] * logistic(ws_prev, a, c, s, d) + w[1] * logistic(ws, a, c, s, d)
-            + w[2] * logistic(ws_next, a, c, s, d))
+    return w[0] * power_curve(ws_prev, *curve) + w[1] * power_curve(ws, *curve) + w[2] * power_curve(ws_next, *curve)
 
 
 @dataclass
@@ -46,13 +63,16 @@ class PowerCurve:
     diagnostics: dict = field(default_factory=dict)  # zone -> {"rmse_cf", "n_hours"}
 
     def weights(self, zone):
-        return alignment_weights(*self.params[zone][4:])
+        return alignment_weights(*self.params[zone][N_CURVE:])
+
+    def curve(self, zone, ws):
+        return power_curve(np.asarray(ws), *self.params[zone][:N_CURVE])
 
     def summary(self):
         rows = []
         for zone, theta in self.params.items():
             w = self.weights(zone)
-            rows.append({"zone": zone, **dict(zip(PARAMS[:4], theta[:4])), "w_prev": w[0], "w_0": w[1],
+            rows.append({"zone": zone, **dict(zip(PARAMS[:N_CURVE], theta[:N_CURVE])), "w_prev": w[0], "w_0": w[1],
                          "w_next": w[2], **self.diagnostics.get(zone, {})})
         return pd.DataFrame(rows).set_index("zone")
 
@@ -97,12 +117,25 @@ def fit_power_curve(until, zones=VALID_ZONES, wind=None, power=None, parks=None)
         cap, cf, w_p, w_0, w_n = cap[ok], cf[ok], w_p[ok], w_0[ok], w_n[ok]
         weights = cap / cap.sum(axis=1, keepdims=True)
 
-        def residual(theta):
-            return (weights * park_cf(theta, w_p, w_0, w_n)).sum(axis=1) - cf
+        # Fit the cut-out only if the zone's wind reaches it often enough; otherwise hold it out of range
+        n_high = int(((weights * w_0).sum(axis=1) > CUTOUT_WIND).sum())
+        fit_cutout = n_high >= CUTOUT_MIN_HOURS
+        free = np.ones(len(PARAMS), dtype=bool)
+        theta = X0.copy()
+        if not fit_cutout:
+            free[CUTOUT_IDX] = False
+            theta[CUTOUT_IDX] = NO_CUTOUT
 
-        fit = least_squares(residual, X0, bounds=(LOWER, UPPER))
-        params[zone] = fit.x
-        diagnostics[zone] = {"rmse_cf": float(np.sqrt(np.mean(fit.fun ** 2))), "n_hours": int(ok.sum())}
+        def residual(x):
+            full = theta.copy()
+            full[free] = x
+            return (weights * park_cf(full, w_p, w_0, w_n)).sum(axis=1) - cf
+
+        fit = least_squares(residual, X0[free], bounds=(LOWER[free], UPPER[free]))
+        theta[free] = fit.x
+        params[zone] = theta
+        diagnostics[zone] = {"rmse_cf": float(np.sqrt(np.mean(fit.fun ** 2))), "n_hours": int(ok.sum()),
+                             "n_high_wind": n_high, "cutout_fitted": fit_cutout}
     return PowerCurve(params=params, until=until, diagnostics=diagnostics)
 
 
@@ -130,9 +163,9 @@ def add_power_ensemble(table, cube, curve, parks=None):
         covered = parks.loc[(parks["zone"] == zone) & parks["has_weather"] & parks["park"].isin(cube_parks)]
         pidx = [cube_parks.index(p) for p in covered["park"]]
         capw = capacity_matrix(covered, cube["issues"])                  # (issues, parks) at issue time
-        a, c, s, d, l_prev, l_next = curve.params[zone]
+        params = [np.float32(x) for x in curve.params[zone][:N_CURVE]]
         w = curve.weights(zone).astype(np.float32)
-        f = logistic(ws[:, pidx], np.float32(a), np.float32(c), np.float32(s), np.float32(d))
+        f = power_curve(ws[:, pidx], *params)
         aligned = w[0] * f[:, :, :-2] + w[1] * f[:, :, 1:-1] + w[2] * f[:, :, 2:]   # lts[1:-1]
         del f
         zone_cf = zone_weighted(aligned, capw)
