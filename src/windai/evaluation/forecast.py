@@ -20,6 +20,9 @@ class Forecast:
     # model hands over a function and score() calls it with y.
     crps_fn: Callable[[np.ndarray], np.ndarray] | None = None
     levels: np.ndarray = field(default_factory=lambda: QUANTILE_LEVELS.copy())
+    # Optional exact (randomised) PIT: a function (y (n,), rng) -> PIT (n,), for models with a closed-form CDF.
+    # Without it, the PIT is reconstructed from the quantiles (scoring.pit_from_quantiles).
+    pit_fn: Callable[..., np.ndarray] | None = None
 
     def __post_init__(self):
         self.keys = self.keys[FORECAST_KEYS].reset_index(drop=True)

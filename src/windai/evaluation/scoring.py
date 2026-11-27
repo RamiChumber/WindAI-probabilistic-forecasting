@@ -25,10 +25,11 @@ def pinball(q, y, tau):
     return np.maximum(tau * diff, (tau - 1) * diff)
 
 
-# CRPS from quantiles. CRPS(F, y) = 2 * integral over tau in (0, 1) of pinball(F^-1(tau), y, tau), so the mean
-# pinball loss over an evenly spaced grid of levels approximates it. With the 99 levels 0.01-0.99 the tails
-# beyond 1 % and 99 % are left out, which makes it slightly smaller than the exact CRPS.
-# For a point forecast (all quantiles equal) this gives exactly the absolute error.
+# CRPS from quantiles. CRPS(F, y) = 2 * integral over tau in (0, 1) of pinball(F^-1(tau), y, tau), so twice
+# the mean pinball loss over an evenly spaced grid of levels approximates it. The mean weights each of the 99
+# levels by 1/99 rather than by the grid spacing 0.01, so for smooth distributions the estimate is about 1 %
+# above the exact CRPS (normal: ratio 1.010 for any y). For a point forecast (all quantiles equal) it gives
+# exactly the absolute error. Compare models on the same estimator.
 def crps_quantiles(quantiles, levels, y):
     return 2 * pinball(quantiles, y, np.asarray(levels)).mean(axis=1)
 
