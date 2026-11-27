@@ -66,6 +66,20 @@ def log_likelihood(y, mu, sigma):
     return np.where(y <= 0, log_ndtr(-mu / sigma), np.where(y >= 1, log_ndtr((mu - 1.0) / sigma), interior))
 
 
+# Derivatives of the log-likelihood with respect to mu and sigma, per observation. At the point masses
+# l = log Phi(w), whose derivative is phi(w) / Phi(w), computed in log space to stay stable in the far tail.
+def log_likelihood_grad(y, mu, sigma):
+    y = np.asarray(y, dtype=float)
+    z = (y - mu) / sigma
+    w0 = -mu / sigma                                  # y <= 0: l = log Phi(w0)
+    w1 = (mu - 1.0) / sigma                           # y >= 1: l = log Phi(w1)
+    mills0 = np.exp(-0.5 * w0 * w0 - LOG_SQRT_2PI - log_ndtr(w0))
+    mills1 = np.exp(-0.5 * w1 * w1 - LOG_SQRT_2PI - log_ndtr(w1))
+    d_mu = np.where(y <= 0, -mills0 / sigma, np.where(y >= 1, mills1 / sigma, z / sigma))
+    d_sigma = np.where(y <= 0, -mills0 * w0 / sigma, np.where(y >= 1, -mills1 * w1 / sigma, (z * z - 1) / sigma))
+    return d_mu, d_sigma
+
+
 # Randomised PIT: F(y) for interior values; at a point mass, uniform over the jump of F (0 to P(Y=0) at y = 0,
 # P(Y<1) to 1 at y = 1), so a calibrated forecast gives a uniform PIT despite the point masses.
 def pit(y, mu, sigma, rng=None):

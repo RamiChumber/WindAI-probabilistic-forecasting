@@ -12,17 +12,20 @@ Usage (from the repo root, tdt4501 env; build the caches first with `python -m w
     python experiments/run_baselines.py --synthetic   # fake data, to check the plumbing
 """
 import argparse
+import time
 from pathlib import Path
 import pandas as pd
 from windai.evaluation.evaluate import score
 from windai.models.baselines import Persistence, Climatology, RawEnsemble
-from windai.models.EMOS import EMOS
-from windai.data.splits import training_rows, evaluation_rows
+from windai.models.EMOS import EMOS, RollingEMOS
+from windai.data.splits import training_rows, evaluation_rows, history_rows
 from windai.utils.synthetic import make_synthetic_dataset
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "experiments" / "results"
 MODELS = [Persistence, Climatology, RawEnsemble, EMOS]
+# EMOS refitted for every issue on rolling windows of 30 / 90 / 365 days and on an expanding window (--windows)
+WINDOW_MODELS = [lambda w=w: RollingEMOS(w) for w in (30, 90, 365, None)]
 
 
 def run(df, fit="val", models=MODELS, by=("zone",)):
@@ -31,14 +34,24 @@ def run(df, fit="val", models=MODELS, by=("zone",)):
     print(f"fit '{fit}': train {train['issue_time'].nunique()} issues, evaluate {target['issue_time'].nunique()} issues")
 
     tables = []
-    for model_cls in models:
-        model = model_cls()
+    history = None
+    for make_model in models:
+        model = make_model()
         try:
-            model.fit(train)
+            if getattr(model, "sequential", False):
+                # Refits per issue on observations known at that issue's time, including earlier issues of the
+                # evaluated fold; the model enforces the time limit itself
+                history = history_rows(df, fit) if history is None else history
+                t0 = time.time()
+                model.fit(history)
+            else:
+                t0 = time.time()
+                model.fit(train)
             forecast = model.predict(target.drop(columns=["power", "cf"]))
         except NotImplementedError:
             print(f"{model.name}: skipped, not implemented")
             continue
+        seconds = time.time() - t0
         y = target["power"].to_numpy()
         # Overall per zone, and per issue regime (12Z / 09Z), since val contains both
         for group in (by, (*by, "issue_hour")):
@@ -49,7 +62,7 @@ def run(df, fit="val", models=MODELS, by=("zone",)):
             else:
                 table = table.loc[table[by[0]] != "all"]      # the overall row is already in the first table
             tables.append(table)
-        print(f"{model.name}: done")
+        print(f"{model.name}: done ({seconds:.0f} s)")
 
     if not tables:
         return pd.DataFrame()
@@ -62,6 +75,7 @@ if __name__ == "__main__":
     which = parser.add_mutually_exclusive_group()
     which.add_argument("--test", action="store_true", help="score the test fold (touch once)")
     which.add_argument("--windai", action="store_true", help="score the WindAI period (touch once)")
+    parser.add_argument("--windows", action="store_true", help="also run EMOS on rolling and expanding windows")
     args = parser.parse_args()
     fit = "test" if args.test else "windai" if args.windai else "val"
 
@@ -76,7 +90,7 @@ if __name__ == "__main__":
             df = pd.concat([df, eval_df], ignore_index=True)
         print(curve.summary().round(3))
 
-    results = run(df, fit=fit)
+    results = run(df, fit=fit, models=MODELS + (WINDOW_MODELS if args.windows else []))
     if results.empty:
         print("No models implemented yet.")
     else:

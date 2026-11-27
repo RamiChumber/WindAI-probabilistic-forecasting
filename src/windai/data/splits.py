@@ -22,6 +22,26 @@ def training_rows(df, fit):
     return df.loc[keep.to_numpy()].reset_index(drop=True)
 
 
+# End (exclusive, local issue date) of the fold each fit evaluates
+FOLD_END = {
+    "val": datetime.date(2024, 4, 1),
+    "test": datetime.date(2025, 4, 1),
+    "windai": datetime.date(2100, 1, 1),
+}
+
+
+# History for sequential models, which refit for every issue on the observations known at that issue's time.
+# Unlike training_rows, this deliberately includes observations from inside the evaluated fold: a model
+# forecasting issue D may use issues up to D-3, whose targets are fully observed by then, and it must enforce
+# that itself. Rows after the evaluated fold and rows without observed power are excluded.
+def history_rows(df, fit):
+    end = pd.Timestamp(FOLD_END[fit])
+    keep = (pd.to_datetime(df["issue_date"]) < end) & df["power"].notna()
+    if fit != "windai":
+        keep &= df["fold"] != "windai"
+    return df.loc[keep.to_numpy()].reset_index(drop=True)
+
+
 # Rows to forecast and score for a fit; rows with missing power stay (scoring drops them)
 def evaluation_rows(df, fit):
     return df.loc[(df["fold"] == fit).to_numpy()].reset_index(drop=True)

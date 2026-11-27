@@ -1,3 +1,4 @@
+import datetime
 import numpy as np
 import pandas as pd
 import pytest
@@ -103,3 +104,102 @@ def test_forecast_functions_in_mw():
     np.testing.assert_allclose(fc.crps_fn(y_mw), 200.0 * cn.crps(df["cf"].to_numpy(), mu, sigma))
     np.testing.assert_allclose(fc.pit_fn(y_mw, rng=0), cn.pit(df["cf"].to_numpy(), mu, sigma, rng=0))
     np.testing.assert_allclose(fc.point, 200.0 * cn.mean(mu, sigma))
+
+
+# ---------------------------------------------------------------- rolling EMOS
+
+from windai.models.EMOS import RollingEMOS
+from windai.data.splits import history_rows, training_rows, evaluation_rows
+
+
+def issue_rows(df, day):
+    return df.loc[df["issue_date"] == day].reset_index(drop=True)
+
+
+# The forecast for issue D may only depend on issues up to D-3: changing later observations (D-2 onwards, all of
+# the evaluated fold included) leaves it unchanged, changing D-3 changes it
+def test_rolling_uses_nothing_after_d_minus_3(synthetic_df):
+    history = history_rows(synthetic_df, "val")
+    day = datetime.date(2023, 4, 20)
+    target = issue_rows(synthetic_df, day).drop(columns=["power", "cf"])
+    base = RollingEMOS(30).fit(history).predict(target).quantiles
+
+    late = history.copy()
+    after = late["issue_date"] >= day - datetime.timedelta(days=2)
+    late.loc[after, "cf"] = np.random.default_rng(0).uniform(0, 1, after.sum())
+    np.testing.assert_array_equal(RollingEMOS(30).fit(late).predict(target).quantiles, base)
+
+    edge = history.copy()
+    at = edge["issue_date"] == day - datetime.timedelta(days=3)
+    edge.loc[at, "cf"] = np.random.default_rng(1).uniform(0, 1, at.sum())
+    assert not np.allclose(RollingEMOS(30).fit(edge).predict(target).quantiles, base)
+
+
+# A 30-day window with pooled hours uses exactly the issues D-32 .. D-3 and hours h-1, h, h+1 (wrapping at midnight)
+def test_rolling_window_bounds_and_pooling(synthetic_df):
+    history = history_rows(synthetic_df, "val")
+    day = datetime.date(2023, 4, 20)
+    model = RollingEMOS(30).fit(history)
+    model.predict(issue_rows(synthetic_df, day).drop(columns=["power", "cf"]))
+    p = model.params_by_issue
+    for hour, hours in [(5, [4, 5, 6]), (0, [23, 0, 1])]:
+        zone = "ELSPOT NO2"
+        lo, hi = day - datetime.timedelta(days=32), day - datetime.timedelta(days=3)
+        expected = ((history["zone"] == zone) & history["target_hour_utc"].isin(hours)
+                    & (history["issue_date"] >= lo) & (history["issue_date"] <= hi)).sum()
+        got = p.loc[(p["zone"] == zone) & (p["target_hour_utc"] == hour), "n"].iloc[0]
+        assert got == expected
+
+
+# The expanding window uses all history up to D-3 and doesn't pool hours
+def test_expanding_window(synthetic_df):
+    history = history_rows(synthetic_df, "val")
+    day = datetime.date(2023, 4, 20)
+    model = RollingEMOS(None).fit(history)
+    model.predict(issue_rows(synthetic_df, day).drop(columns=["power", "cf"]))
+    p = model.params_by_issue.iloc[0]
+    expected = ((history["zone"] == p["zone"]) & (history["target_hour_utc"] == p["target_hour_utc"])
+                & (history["issue_date"] <= day - datetime.timedelta(days=3))).sum()
+    assert p["n"] == expected and not model.pool_hours
+
+
+# For val's first issue (1 Apr), the expanding window holds exactly the purged training rows of the static fit,
+# so both give the same parameters
+def test_expanding_matches_static_on_first_val_issue(synthetic_df):
+    day = datetime.date(2023, 4, 1)
+    static = EMOS().fit(training_rows(synthetic_df, "val")).summary()
+    rolling = RollingEMOS(None).fit(history_rows(synthetic_df, "val"))
+    rolling.predict(issue_rows(synthetic_df, day).drop(columns=["power", "cf"]))
+    r = rolling.params_by_issue.set_index(["zone", "target_hour_utc"])
+    np.testing.assert_allclose(r[["a", "b", "c", "d"]].to_numpy(),
+                               static.loc[r.index, ["a", "b", "c", "d"]].to_numpy(), rtol=1e-6, atol=1e-8)
+
+
+# Data from 10 Mar to 18 Apr 2024 spans the end of the val fold: the val history keeps March, drops April (test)
+def test_history_rows_stop_at_fold_end():
+    from windai.utils.synthetic import make_synthetic_dataset
+    df = make_synthetic_dataset(n_issues=40, start="2024-03-10")
+    h = history_rows(df, "val")
+    assert h["issue_date"].max() == datetime.date(2024, 3, 31)
+    assert set(h["fold"]) == {"val"} and h["power"].notna().all()
+    assert set(history_rows(df, "test")["fold"]) == {"val", "test"}
+
+
+# The runner hands a sequential model the history, and its forecasts cover exactly the evaluated rows
+def test_runner_with_rolling_model(synthetic_df):
+    import sys, pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "experiments"))
+    from run_baselines import run
+    res = run(synthetic_df, fit="val", models=[lambda: RollingEMOS(30)])
+    n_val = evaluation_rows(synthetic_df, "val")["power"].notna().sum()
+    assert res.loc[("emos_rolling_30", "all", "all"), "n"] == n_val
+
+
+# The analytic gradient of the log-likelihood matches finite differences, including the point masses
+@pytest.mark.parametrize("y", [0.0, 0.3, 1.0])
+def test_log_likelihood_grad(y):
+    mu, sigma, eps = 0.2, 0.15, 1e-6
+    d_mu, d_sigma = cn.log_likelihood_grad(y, mu, sigma)
+    num_mu = (cn.log_likelihood(y, mu + eps, sigma) - cn.log_likelihood(y, mu - eps, sigma)) / (2 * eps)
+    num_sigma = (cn.log_likelihood(y, mu, sigma + eps) - cn.log_likelihood(y, mu, sigma - eps)) / (2 * eps)
+    assert d_mu == pytest.approx(num_mu, rel=1e-5) and d_sigma == pytest.approx(num_sigma, rel=1e-5)
