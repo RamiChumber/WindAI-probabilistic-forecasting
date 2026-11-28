@@ -114,3 +114,30 @@ def _level_index(levels, tau):
     if len(idx) == 0:
         raise ValueError(f"level {tau} is not on the quantile grid")
     return idx[0]
+
+
+# Mean width of the central interval of the given width, per row (same bounds as coverage)
+def interval_width(quantiles, levels, width):
+    return quantile_at(quantiles, levels, (1 + width) / 2) - quantile_at(quantiles, levels, (1 - width) / 2)
+
+
+# P(Y > x) per row, read off the quantile grid: the CDF at x is interpolated linearly between the two grid
+# quantiles around x. Beyond the grid the tail is not stored, so x below the 0.01 quantile gets F = 0.005 and x
+# above the 0.99 quantile gets F = 0.995 (the middle of the unstored tail).
+def exceedance_prob(quantiles, levels, x):
+    q = np.asarray(quantiles, dtype=float)
+    levels = np.asarray(levels, dtype=float)
+    x = np.broadcast_to(np.asarray(x, dtype=float), (len(q),))
+    k = (q <= x[:, None]).sum(axis=1)                    # number of grid quantiles at or below x
+    inner = np.clip(k, 1, len(levels) - 1)
+    lo, hi = q[np.arange(len(q)), inner - 1], q[np.arange(len(q)), inner]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        w = np.where(hi > lo, (x - lo) / (hi - lo), 1.0)
+    F = levels[inner - 1] + np.clip(w, 0, 1) * (levels[inner] - levels[inner - 1])
+    F = np.where(k == 0, levels[0] / 2, np.where(k == len(levels), 1 - (1 - levels[-1]) / 2, F))
+    return 1 - F
+
+
+# Brier score of probability forecasts p for a binary event
+def brier(p, event):
+    return (np.asarray(p, dtype=float) - np.asarray(event, dtype=float)) ** 2

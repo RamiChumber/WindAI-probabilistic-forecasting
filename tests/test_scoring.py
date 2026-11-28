@@ -139,3 +139,32 @@ def test_pit_randomised_at_point_mass():
     pit = pit_from_quantiles(q, QUANTILE_LEVELS, np.zeros(20000), rng=3)
     counts, _ = np.histogram(pit, bins=10, range=(0, 1))
     np.testing.assert_allclose(counts / 20000, 0.1, atol=0.01)
+
+
+# ---------------------------------------------------------------- interval width, exceedance, Brier
+
+from windai.evaluation.scoring import interval_width, exceedance_prob, brier
+
+
+def normal_grid(mu=0.0, sd=1.0, n=1):
+    return np.tile(stats.norm.ppf(QUANTILE_LEVELS, mu, sd), (n, 1))
+
+
+def test_interval_width_normal():
+    q = normal_grid()
+    assert interval_width(q, QUANTILE_LEVELS, 0.8)[0] == pytest.approx(2 * stats.norm.ppf(0.9))
+
+
+# Inside the grid the exceedance probability is close to the exact one; beyond it, the unstored tail is halved
+@pytest.mark.parametrize("x", [-1.5, -0.3, 0.0, 0.7, 2.0])
+def test_exceedance_prob_normal(x):
+    assert exceedance_prob(normal_grid(), QUANTILE_LEVELS, x)[0] == pytest.approx(stats.norm.sf(x), abs=2e-3)
+
+
+def test_exceedance_prob_beyond_grid():
+    q = normal_grid(n=2)
+    np.testing.assert_allclose(exceedance_prob(q, QUANTILE_LEVELS, np.array([-5.0, 5.0])), [0.995, 0.005])
+
+
+def test_brier_by_hand():
+    np.testing.assert_allclose(brier([0.2, 0.9, 0.5], [0, 1, 1]), [0.04, 0.01, 0.25])

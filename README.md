@@ -81,12 +81,14 @@ Models work in capacity factor and return forecasts in MW (× capacity at issue 
 | File | Contents |
 |---|---|
 | `forecast.py` | `Forecast`: `keys`, `point`, 99 `quantiles` (levels 0.01–0.99), optional `samples`, `crps_fn` (exact CRPS) and `pit_fn` (exact PIT). `quantiles_from_samples`. |
-| `scoring.py` | `rmse`, `mae`, `pinball`, `crps_quantiles`, `crps_sample` (ensemble CRPS), `pit_from_quantiles` (randomised PIT), `quantile_at` (interpolates between grid levels), `coverage`. |
-| `evaluate.py` | `score_rows` (per-row scores) and `score(forecast, y, by=...)`: a summary table per group (e.g. zone, or zone × `issue_hour`) with RMSE, MAE, CRPS, pinball losses and coverage at 50/80/90/95 %. |
+| `scoring.py` | `rmse`, `mae`, `pinball`, `crps_quantiles`, `crps_sample` (ensemble CRPS), `pit_from_quantiles` (randomised PIT), `quantile_at` (interpolates between grid levels), `coverage`, `interval_width`, `exceedance_prob` (P(Y > x) from the quantile grid), `brier`. |
+| `dependence.py` | Dependence in forecast errors: `normal_scores` (Φ⁻¹ of the PIT), `z_matrix` (issue day × local hour per zone), `acf` and `n_eff` on a calendar-day axis, `long_run_cov` (Newey–West), `numerical_hessian` and `sandwich_ratios` (B/A), `diebold_mariano` (daily-mean loss differences with a Newey–West variance). |
+| `evaluate.py` | `score_rows` (per-row scores) and `score(forecast, y, by=...)`: a summary table per group (e.g. zone, or zone × `issue_hour`) with RMSE, daily RMSE (per forecast day, then averaged; over all zones this matches the competition's scale), MAE, bias, CRPS, pinball losses, and coverage and width at 50/80/90/95 %. Optional `events` (a threshold per row) add Brier scores. |
 
 ### `experiments/run_baselines.py`
 Fits every model on the training rows of a fit, forecasts its evaluation fold, and writes a score table (per zone,
-and per zone × issue regime) to `experiments/results/`.
+and per zone × issue regime) to `experiments/results/`. It includes Brier scores for high production (CF above the
+zone's 90th and 95th training percentile) and their skill against climatology.
 
 ### `tests/`
 `conftest.py` provides a synthetic model table (Jan–May 2023, split into train and val). Tests that need the real

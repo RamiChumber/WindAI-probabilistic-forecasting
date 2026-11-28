@@ -31,6 +31,15 @@ def location_scale(theta, m, s2):
     return a + b * m, np.sqrt(c * c + d * d * s2)
 
 
+def score_contributions(theta, y, m, s2):
+    """Per-observation gradient of the log-likelihood with respect to (a, b, c, d), shape (n, 4): the chain rule
+    through mu = a + b m and sigma = sqrt(c^2 + d^2 s2)."""
+    a, b, c, d = theta
+    mu, sigma = location_scale(theta, m, s2)
+    d_mu, d_sigma = cn.log_likelihood_grad(y, mu, sigma)
+    return np.column_stack([d_mu, d_mu * m, d_sigma * c / sigma, d_sigma * d * s2 / sigma])
+
+
 def fit_censored(y, m, s2, objective="ml", x0=None):
     """Fits (a, b, c, d) of one censored-normal EMOS model. Without x0, starts from least squares of y on the
     ensemble mean, with the residual SD as c and d = 1. Returns (theta, converged, loss)."""
@@ -40,14 +49,11 @@ def fit_censored(y, m, s2, objective="ml", x0=None):
         x0 = np.array([a, b, np.std(y - X @ np.array([a, b])), 1.0])
 
     if objective == "ml":
-        # Mean negative log-likelihood with its analytic gradient (chain rule through mu = a + b m and
-        # sigma = sqrt(c^2 + d^2 s2)), which saves the optimiser most of its function evaluations
+        # Mean negative log-likelihood with its analytic gradient, which saves the optimiser most of its
+        # function evaluations
         def loss(theta):
-            a, b, c, d = theta
             mu, sigma = location_scale(theta, m, s2)
-            d_mu, d_sigma = cn.log_likelihood_grad(y, mu, sigma)
-            grad = -np.array([d_mu.mean(), (d_mu * m).mean(),
-                              (d_sigma * c / sigma).mean(), (d_sigma * d * s2 / sigma).mean()])
+            grad = -score_contributions(theta, y, m, s2).mean(axis=0)
             return -cn.log_likelihood(y, mu, sigma).mean(), grad
         res = minimize(loss, x0, method="L-BFGS-B", jac=True)
     else:

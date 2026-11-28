@@ -10,3 +10,7 @@ __pycache__/
 *.log
 *.pdf
 *.md
+*.xlsx
+*.csv
+*.parquet
+*.png

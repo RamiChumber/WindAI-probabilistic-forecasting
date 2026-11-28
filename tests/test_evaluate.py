@@ -18,7 +18,7 @@ def ensemble_forecast(test_df):
 def test_score_table_layout(ensemble_forecast, test_df):
     table = score(ensemble_forecast, test_df["power"].to_numpy())
     assert list(table.index) == sorted(test_df["zone"].unique()) + ["all"]
-    assert list(table.columns[:4]) == ["n", "rmse", "mae", "crps_q"]
+    assert list(table.columns[:6]) == ["n", "rmse", "rmse_daily", "mae", "bias", "crps_q"]
     for col in ["pinball_0.1", "pinball_0.5", "pinball_0.9", "cov_50", "cov_80", "cov_90", "cov_95", "crps_sample"]:
         assert col in table.columns
     assert "crps_exact" not in table.columns
@@ -55,3 +55,25 @@ def test_missing_observations_are_dropped(ensemble_forecast, test_df):
 def test_wrong_length(ensemble_forecast):
     with pytest.raises(ValueError, match="y has shape"):
         score_rows(ensemble_forecast, np.zeros(3))
+
+
+# Bias is the mean of forecast minus observation; rmse_daily is the RMSE per issue, averaged over issues
+def test_bias_and_daily_rmse(ensemble_forecast, test_df):
+    y = test_df["power"].to_numpy()
+    table = score(ensemble_forecast, y)
+    err = ensemble_forecast.point - y
+    assert table.loc["all", "bias"] == pytest.approx(np.nanmean(err))
+    d = test_df.assign(sq=err ** 2).dropna(subset=["sq"])
+    assert table.loc["all", "rmse_daily"] == pytest.approx(np.sqrt(d.groupby("issue_time")["sq"].mean()).mean())
+    one = d.loc[d["zone"] == "ELSPOT NO2"]
+    assert table.loc["ELSPOT NO2", "rmse_daily"] == pytest.approx(np.sqrt(one.groupby("issue_time")["sq"].mean()).mean())
+
+
+# Interval widths grow with the nominal width; a Brier column appears per event
+def test_widths_and_events(ensemble_forecast, test_df):
+    y = test_df["power"].to_numpy()
+    threshold = 0.6 * test_df["capacity_mw"].to_numpy()
+    table = score(ensemble_forecast, y, events={"high": threshold})
+    w = table.loc["all", ["width_50", "width_80", "width_90", "width_95"]].to_numpy(dtype=float)
+    assert (np.diff(w) > 0).all() and (w > 0).all()
+    assert 0 <= table.loc["all", "bs_high"] <= 1

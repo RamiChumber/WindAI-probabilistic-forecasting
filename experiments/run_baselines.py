@@ -17,21 +17,29 @@ from pathlib import Path
 import pandas as pd
 from windai.evaluation.evaluate import score
 from windai.models.baselines import Persistence, Climatology, RawEnsemble
-from windai.models.EMOS import EMOS, RollingEMOS
+from windai.models.EMOS import EMOS, SeasonalEMOS, RollingEMOS
 from windai.data.splits import training_rows, evaluation_rows, history_rows
 from windai.utils.synthetic import make_synthetic_dataset
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "experiments" / "results"
-MODELS = [Persistence, Climatology, RawEnsemble, EMOS]
+MODELS = [Persistence, Climatology, RawEnsemble, EMOS, SeasonalEMOS]
 # EMOS refitted for every issue on rolling windows of 30 / 90 / 365 days and on an expanding window (--windows)
 WINDOW_MODELS = [lambda w=w: RollingEMOS(w) for w in (30, 90, 365, None)]
+# High-production events for the Brier score: CF above these quantiles of the zone's training CF
+EVENT_QUANTILES = {"q90": 0.90, "q95": 0.95}
 
 
 def run(df, fit="val", models=MODELS, by=("zone",)):
     train = training_rows(df, fit)
     target = evaluation_rows(df, fit)
     print(f"fit '{fit}': train {train['issue_time'].nunique()} issues, evaluate {target['issue_time'].nunique()} issues")
+
+    # Event thresholds per row in MW: the zone's training CF quantile times the row's capacity
+    events = {}
+    for name, q in EVENT_QUANTILES.items():
+        cf_threshold = train.dropna(subset=["cf"]).groupby("zone")["cf"].quantile(q)
+        events[name] = (target["zone"].map(cf_threshold) * target["capacity_mw"]).to_numpy()
 
     tables = []
     history = None
@@ -55,7 +63,7 @@ def run(df, fit="val", models=MODELS, by=("zone",)):
         y = target["power"].to_numpy()
         # Overall per zone, and per issue regime (12Z / 09Z), since val contains both
         for group in (by, (*by, "issue_hour")):
-            table = score(forecast, y, by=group).reset_index()
+            table = score(forecast, y, by=group, events=events).reset_index()
             table.insert(0, "model", model.name)
             if "issue_hour" not in table.columns:
                 table.insert(2, "issue_hour", "all")
@@ -66,7 +74,14 @@ def run(df, fit="val", models=MODELS, by=("zone",)):
 
     if not tables:
         return pd.DataFrame()
-    return pd.concat(tables, ignore_index=True).set_index(["model", *by, "issue_hour"])
+    results = pd.concat(tables, ignore_index=True).set_index(["model", *by, "issue_hour"])
+    # Brier skill score against climatology, matched on zone and regime
+    if "climatology" in results.index.get_level_values("model"):
+        clim = results.xs("climatology", level="model")
+        for name in EVENT_QUANTILES:
+            ref = clim[f"bs_{name}"].reindex(results.index.droplevel("model")).to_numpy()
+            results[f"bss_{name}"] = 1 - results[f"bs_{name}"] / ref
+    return results
 
 
 if __name__ == "__main__":
